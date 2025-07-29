@@ -1,57 +1,60 @@
-#!/usr/bin/env python
-# coding: utf-8
+# app.py
 
-# In[1]:
-import os
-from flask import Flask, request, redirect, url_for, render_template
-from werkzeug.utils import secure_filename
-from azure.storage.blob import BlobServiceClient
-import string
-import random
-import requests
-import configparser
+from flask import Flask, request, render_template_string
+import boto3
+import config
 
-app = Flask(__name__, instance_relative_config=True)
+app = Flask(__name__)
 
-Config = configparser.ConfigParser()
-Config.read("config.py")
+# Initialize S3 client using IAM role (no keys needed)
+s3 = boto3.client('s3', region_name=config.AWS_REGION)
 
-# Account name
-account = Config.get('DEFAULT', 'account')
-# Azure Storage account access key
-key = Config.get('DEFAULT', 'key')
-# Container name
-container = Config.get('DEFAULT', 'container')
+# Simple HTML form (inlined for now)
+HTML = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Upload to S3</title>
+</head>
+<body>
+    <h1>Upload File to S3</h1>
+    <form method="POST" action="/upload" enctype="multipart/form-data">
+        <input type="file" name="file" required>
+        <input type="submit" value="Upload">
+    </form>
+</body>
+</html>
+'''
 
+@app.route('/')
+def index():
+    return render_template_string(HTML)
 
-# blob_service = BlockBlobService(account_name=account, account_key=key)
-
-blob_service_client = BlobServiceClient(account_url=f'https://{account}.blob.core.windows.net/', credential=key)
-
-@app.route("/")
-def main():
-    return render_template('index.html')
-@app.route('/upload', methods=['GET', 'POST'])
+@app.route('/upload', methods=['POST'])
 def upload_file():
-    if request.method == 'POST':
-        file = request.files['file']
-        filename = secure_filename(file.filename)
-        fileextension = filename.rsplit('.', 1)[1]
-        try:
-            # blob_service.create_blob_from_stream(container, filename, file) 
-            # blob_service_client.create_blob_from_stream(container, filename, file)
-            blob_service_client.get_blob_client(container=container, blob=filename).upload_blob(file)
+    if 'file' not in request.files:
+        return 'No file part in the request', 400
 
-        except Exception:
-            print('Exception=' + str(Exception))
-            pass
-        ref = 'http://' + account + '.blob.core.windows.net/' + container + '/' + filename
+    file = request.files['file']
 
-    return render_template('uploadfile.html')
+    if file.filename == '':
+        return 'No file selected', 400
 
+    try:
+        # Upload the file to the specified S3 bucket
+        s3.upload_fileobj(
+            file,
+            config.S3_BUCKET_NAME,
+            file.filename,
+            ExtraArgs={'ACL': 'public-read'}  # Optional: make file publicly accessible
+        )
+
+        file_url = f"https://{config.S3_BUCKET_NAME}.s3.{config.AWS_REGION}.amazonaws.com/{file.filename}"
+        return f'File uploaded successfully! <br><a href="{file_url}">View File</a>'
+
+    except Exception as e:
+        return f"File upload failed: {str(e)}", 500
 
 if __name__ == '__main__':
+    # Run on port 80 so that ALB can access it
     app.run(host='0.0.0.0', port=80)
-
-
-# In[ ]:
